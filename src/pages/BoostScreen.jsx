@@ -404,7 +404,7 @@ function WorkoutSession({ onFinish, onExit }) {
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           whileTap={{ scale: 0.97 }}
-          onClick={onFinish}
+          onClick={() => onFinish(sets)}
           className="w-full py-3 rounded-xl text-sm font-black uppercase tracking-wide border-none cursor-pointer flex items-center justify-center gap-2"
           style={{ background: 'linear-gradient(90deg, #22c55e, #16a34a)', color: '#fff' }}
         >
@@ -420,7 +420,7 @@ const GOAL_NAMES = {
   recomp: 'Boost Recomp', endurance: 'Boost Cardio',
 };
 
-export default function BoostScreen({ initialTab = 'program', sessionActive = false, onSessionStart, onSessionEnd, profile, challengeActive, onStartChallenge }) {
+export default function BoostScreen({ initialTab = 'program', sessionActive = false, onSessionStart, onSessionEnd, onSessionExit, profile, challengeActive, onStartChallenge }) {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [selectedDay, setSelectedDay] = useState(3);
   const [lockedToast, setLockedToast] = useState(false);
@@ -435,7 +435,12 @@ export default function BoostScreen({ initialTab = 'program', sessionActive = fa
   };
 
   if (sessionActive) {
-    return <WorkoutSession onFinish={onSessionEnd} onExit={onSessionEnd} />;
+    return (
+      <WorkoutSession
+        onFinish={(sets) => onSessionEnd(sets)}
+        onExit={onSessionExit || onSessionEnd}
+      />
+    );
   }
 
   const expLabels = { beginner: 'Principiante', intermediate: 'Intermedio', advanced: 'Avanzado' };

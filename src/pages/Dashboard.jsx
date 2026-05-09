@@ -533,6 +533,7 @@ export default function Dashboard({ profile: initialProfile, onProfileUpdate }) 
   const [activeNav, setActiveNav] = useState('home');
   const [boostTab, setBoostTab] = useState('program');
   const [sessionActive, setSessionActive] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
   const [sessionElapsed, setSessionElapsed] = useState(0);
   const [showChallengeModal, setShowChallengeModal] = useState(false);
 
@@ -566,6 +567,36 @@ export default function Dashboard({ profile: initialProfile, onProfileUpdate }) 
     setShowChallengeModal(false);
     setActiveNav('boost');
     setBoostTab('program');
+  };
+
+  const handleSessionStart = async () => {
+    if (!user) { setSessionActive(true); return; }
+    const { data, error } = await supabase
+      .from('workout_sessions')
+      .insert({ user_id: user.id, started_at: new Date().toISOString() })
+      .select('id')
+      .single();
+    if (!error && data) setSessionId(data.id);
+    setSessionActive(true);
+  };
+
+  const handleSessionFinish = async (sets) => {
+    if (sessionId) {
+      const durationMinutes = Math.round(sessionElapsed / 60) || 1;
+      await supabase
+        .from('workout_sessions')
+        .update({ completed_at: new Date().toISOString(), duration_minutes: durationMinutes })
+        .eq('id', sessionId);
+    }
+    setSessionId(null);
+    setSessionActive(false);
+    setSessionElapsed(0);
+  };
+
+  const handleSessionExit = () => {
+    setSessionId(null);
+    setSessionActive(false);
+    setSessionElapsed(0);
   };
 
   const handleSignOut = async () => await supabase.auth.signOut();
@@ -692,8 +723,9 @@ export default function Dashboard({ profile: initialProfile, onProfileUpdate }) 
                 <BoostScreen
                   initialTab={boostTab}
                   sessionActive={sessionActive}
-                  onSessionStart={() => setSessionActive(true)}
-                  onSessionEnd={() => setSessionActive(false)}
+                  onSessionStart={handleSessionStart}
+                  onSessionEnd={handleSessionFinish}
+                  onSessionExit={handleSessionExit}
                   profile={profile}
                   challengeActive={challengeActive}
                   onStartChallenge={() => setShowChallengeModal(true)}
