@@ -1,6 +1,133 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Zap, Play, Lock, CircleCheck as CheckCircle, Clock, ChevronRight, Dumbbell, Target, Star, ArrowRight, Apple, Flame, Droplets, Wheat, ArrowLeft, ChevronUp, ChevronDown, X, Trophy } from 'lucide-react';
+import { Zap, Play, Lock, CircleCheck as CheckCircle, Clock, ChevronRight, Dumbbell, Target, Star, ArrowRight, Apple, Flame, Droplets, Wheat, ArrowLeft, ChevronUp, ChevronDown, X, Trophy, RefreshCw, Sparkles } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+
+function useAIStream(functionName) {
+  const [text, setText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+  const abortRef = useRef(null);
+
+  const start = useCallback(async () => {
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setText('');
+    setError(null);
+    setDone(false);
+    setLoading(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Debes iniciar sesión.');
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const res = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Error ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+          try {
+            const evt = JSON.parse(raw);
+            if (evt.text) setText(prev => prev + evt.text);
+            if (evt.done) setDone(true);
+          } catch { /* ignore */ }
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setError(err.message || 'Error al generar. Inténtalo de nuevo.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [functionName]);
+
+  const reset = useCallback(() => {
+    if (abortRef.current) abortRef.current.abort();
+    setText('');
+    setError(null);
+    setDone(false);
+    setLoading(false);
+  }, []);
+
+  return { text, loading, error, done, start, reset };
+}
+
+function AIStreamDisplay({ text, loading, error, done, onRetry, onRegenerate, label, icon: Icon }) {
+  const cursorVisible = loading && !done;
+  return (
+    <div className="glass-effect rounded-2xl p-5 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {Icon && <Icon className="w-4 h-4 text-[#FFD600]" />}
+          <span className="text-sm font-bold text-[#F4F4F5]">{label}</span>
+          {loading && (
+            <span className="flex items-center gap-1 text-[10px] text-[#71717A]">
+              <Sparkles className="w-3 h-3 text-[#FFD600] animate-pulse" /> Generando…
+            </span>
+          )}
+          {done && <span className="text-[10px] text-[#22c55e]">✓ Listo</span>}
+        </div>
+        {(done || error) && (
+          <button
+            onClick={onRegenerate}
+            className="flex items-center gap-1 text-[10px] text-[#71717A] hover:text-[#FFD600] transition-colors border-none cursor-pointer bg-transparent"
+          >
+            <RefreshCw className="w-3 h-3" /> Regenerar
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="flex flex-col items-center gap-2 py-4">
+          <p className="text-xs text-red-400 text-center">{error}</p>
+          <button
+            onClick={onRetry}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border-none cursor-pointer"
+            style={{ background: 'rgba(255,214,0,0.1)', color: '#FFD600' }}
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Reintentar
+          </button>
+        </div>
+      )}
+
+      {!error && (
+        <div
+          className="text-sm text-[#D4D4D8] leading-relaxed whitespace-pre-wrap font-mono"
+          style={{ minHeight: text ? 'auto' : '120px' }}
+        >
+          {text || (loading && <span className="text-[#71717A] text-xs animate-pulse">Conectando con IA…</span>)}
+          {cursorVisible && <span className="inline-block w-0.5 h-4 bg-[#FFD600] ml-0.5 animate-pulse align-middle" />}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const PROGRAMS = [
   {
@@ -420,10 +547,25 @@ const GOAL_NAMES = {
   recomp: 'Boost Recomp', endurance: 'Boost Cardio',
 };
 
-export default function BoostScreen({ initialTab = 'program', sessionActive = false, onSessionStart, onSessionEnd, profile, challengeActive, onStartChallenge }) {
+export default function BoostScreen({ initialTab = 'program', sessionActive = false, onSessionStart, onSessionEnd, onSessionExit, profile, challengeActive, onStartChallenge }) {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [selectedDay, setSelectedDay] = useState(3);
   const [lockedToast, setLockedToast] = useState(false);
+
+  const mealPlanStream = useAIStream('generate-meal-plan');
+  const workoutPlanStream = useAIStream('generate-workout-plan');
+
+  useEffect(() => {
+    if (activeTab === 'nutrition' && !mealPlanStream.text && !mealPlanStream.loading) {
+      mealPlanStream.start();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'today' && !workoutPlanStream.text && !workoutPlanStream.loading) {
+      workoutPlanStream.start();
+    }
+  }, [activeTab]);
 
   const handleProgramStart = (program) => {
     if (program.locked) {
@@ -435,7 +577,12 @@ export default function BoostScreen({ initialTab = 'program', sessionActive = fa
   };
 
   if (sessionActive) {
-    return <WorkoutSession onFinish={onSessionEnd} onExit={onSessionEnd} />;
+    return (
+      <WorkoutSession
+        onFinish={(sets) => onSessionEnd(sets)}
+        onExit={onSessionExit || onSessionEnd}
+      />
+    );
   }
 
   const expLabels = { beginner: 'Principiante', intermediate: 'Intermedio', advanced: 'Avanzado' };
@@ -582,30 +729,17 @@ export default function BoostScreen({ initialTab = 'program', sessionActive = fa
                 </motion.button>
               </div>
             </div>
-            {/* Exercises */}
-            <div className="glass-effect rounded-2xl p-5">
-              <h3 className="font-bold text-[#F4F4F5] mb-4">Ejercicios ({EXERCISES.length})</h3>
-              <div className="flex flex-col gap-3">
-                {EXERCISES.map((e, i) => (
-                  <div key={e.name} className="flex items-center gap-3 p-3 rounded-xl bg-[#111113]">
-                    <div className="w-10 h-10 rounded-xl bg-[#0A0A0C] flex items-center justify-center text-lg flex-shrink-0">
-                      {e.icon}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-[#F4F4F5] truncate">{e.name}</p>
-                      <div className="flex gap-3 text-[10px] text-[#71717A] mt-0.5">
-                        <span className="flex items-center gap-1"><Dumbbell className="w-3 h-3" />{e.sets}</span>
-                        <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{e.rest}</span>
-                      </div>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-[10px] text-[#71717A]">PR</p>
-                      <p className="text-xs font-black text-[#FFD600]">{e.pr}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {/* AI workout plan */}
+            <AIStreamDisplay
+              text={workoutPlanStream.text}
+              loading={workoutPlanStream.loading}
+              error={workoutPlanStream.error}
+              done={workoutPlanStream.done}
+              onRetry={workoutPlanStream.start}
+              onRegenerate={() => { workoutPlanStream.reset(); workoutPlanStream.start(); }}
+              label="Plan de entrenamiento personalizado"
+              icon={Dumbbell}
+            />
           </motion.div>
         )}
 
@@ -653,37 +787,16 @@ export default function BoostScreen({ initialTab = 'program', sessionActive = fa
                 </div>
               );
             })()}
-            <div className="flex flex-col gap-3">
-              {MEAL_PLAN.map((meal, i) => (
-                <motion.div
-                  key={meal.name}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.06 }}
-                  className="glass-effect rounded-2xl p-4"
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-black text-[#FFD600] bg-[rgba(255,214,0,0.1)] px-2 py-0.5 rounded-full">{meal.time}</span>
-                        <h4 className="text-sm font-bold text-[#F4F4F5]">{meal.name}</h4>
-                      </div>
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {meal.foods.map(f => (
-                          <span key={f} className="text-[10px] text-[#71717A] bg-[#111113] px-2 py-0.5 rounded-full">{f}</span>
-                        ))}
-                      </div>
-                    </div>
-                    <span className="text-sm font-black text-white flex-shrink-0 ml-2">{meal.kcal} kcal</span>
-                  </div>
-                  <div className="flex gap-3 text-[10px] font-bold mt-2 pt-2 border-t border-white/5">
-                    <span className="text-[#22d3ee]">P: {meal.protein}g</span>
-                    <span className="text-[#f59e0b]">C: {meal.carbs}g</span>
-                    <span className="text-[#f97316]">G: {meal.fat}g</span>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
+            <AIStreamDisplay
+              text={mealPlanStream.text}
+              loading={mealPlanStream.loading}
+              error={mealPlanStream.error}
+              done={mealPlanStream.done}
+              onRetry={mealPlanStream.start}
+              onRegenerate={() => { mealPlanStream.reset(); mealPlanStream.start(); }}
+              label="Plan de comidas personalizado"
+              icon={Apple}
+            />
           </motion.div>
         )}
 
