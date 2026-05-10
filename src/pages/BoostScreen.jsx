@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Zap, Play, Lock, CircleCheck as CheckCircle, Clock, ChevronRight, Dumbbell, Target, Star, ArrowRight, Apple, Flame, Droplets, Wheat, ArrowLeft, ChevronUp, ChevronDown, X, Trophy } from 'lucide-react';
+import { Zap, Play, Lock, CircleCheck as CheckCircle, Clock, ChevronRight, Dumbbell, Target, Star, ArrowRight, Apple, Flame, Droplets, Wheat, ArrowLeft, ChevronUp, ChevronDown, X, Trophy, RefreshCw } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 const PROGRAMS = [
   {
@@ -420,10 +421,37 @@ const GOAL_NAMES = {
   recomp: 'Boost Recomp', endurance: 'Boost Cardio',
 };
 
-export default function BoostScreen({ initialTab = 'program', sessionActive = false, onSessionStart, onSessionEnd, profile, challengeActive, onStartChallenge }) {
+export default function BoostScreen({ initialTab = 'program', sessionActive = false, onSessionStart, onSessionEnd, onSessionExit, profile, challengeActive, onStartChallenge }) {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [selectedDay, setSelectedDay] = useState(3);
   const [lockedToast, setLockedToast] = useState(false);
+  const [mealPlan, setMealPlan] = useState(null);
+  const [mealPlanLoading, setMealPlanLoading] = useState(false);
+  const [mealPlanError, setMealPlanError] = useState(null);
+
+  const fetchMealPlan = useCallback(async () => {
+    setMealPlanLoading(true);
+    setMealPlanError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setMealPlanError('Debes iniciar sesión.'); return; }
+      const { data, error } = await supabase.functions.invoke('generate-meal-plan', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (error) throw error;
+      setMealPlan(data.meals || []);
+    } catch (err) {
+      setMealPlanError('No se pudo generar el plan. Inténtalo de nuevo.');
+    } finally {
+      setMealPlanLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'nutrition' && !mealPlan && !mealPlanLoading) {
+      fetchMealPlan();
+    }
+  }, [activeTab, mealPlan, mealPlanLoading, fetchMealPlan]);
 
   const handleProgramStart = (program) => {
     if (program.locked) {
@@ -435,7 +463,12 @@ export default function BoostScreen({ initialTab = 'program', sessionActive = fa
   };
 
   if (sessionActive) {
-    return <WorkoutSession onFinish={onSessionEnd} onExit={onSessionEnd} />;
+    return (
+      <WorkoutSession
+        onFinish={(sets) => onSessionEnd(sets)}
+        onExit={onSessionExit || onSessionEnd}
+      />
+    );
   }
 
   const expLabels = { beginner: 'Principiante', intermediate: 'Intermedio', advanced: 'Avanzado' };
@@ -653,37 +686,94 @@ export default function BoostScreen({ initialTab = 'program', sessionActive = fa
                 </div>
               );
             })()}
-            <div className="flex flex-col gap-3">
-              {MEAL_PLAN.map((meal, i) => (
-                <motion.div
-                  key={meal.name}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.06 }}
-                  className="glass-effect rounded-2xl p-4"
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-black text-[#FFD600] bg-[rgba(255,214,0,0.1)] px-2 py-0.5 rounded-full">{meal.time}</span>
-                        <h4 className="text-sm font-bold text-[#F4F4F5]">{meal.name}</h4>
-                      </div>
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {meal.foods.map(f => (
-                          <span key={f} className="text-[10px] text-[#71717A] bg-[#111113] px-2 py-0.5 rounded-full">{f}</span>
-                        ))}
-                      </div>
+            {mealPlanLoading && (
+              <div className="flex flex-col gap-3">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="glass-effect rounded-2xl p-4 animate-pulse">
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="h-4 w-12 bg-white/10 rounded-full" />
+                      <div className="h-4 w-24 bg-white/10 rounded" />
                     </div>
-                    <span className="text-sm font-black text-white flex-shrink-0 ml-2">{meal.kcal} kcal</span>
+                    <div className="flex gap-2 flex-wrap mb-3">
+                      <div className="h-3 w-20 bg-white/5 rounded-full" />
+                      <div className="h-3 w-16 bg-white/5 rounded-full" />
+                      <div className="h-3 w-24 bg-white/5 rounded-full" />
+                    </div>
+                    <div className="h-3 w-32 bg-white/5 rounded" />
                   </div>
-                  <div className="flex gap-3 text-[10px] font-bold mt-2 pt-2 border-t border-white/5">
-                    <span className="text-[#22d3ee]">P: {meal.protein}g</span>
-                    <span className="text-[#f59e0b]">C: {meal.carbs}g</span>
-                    <span className="text-[#f97316]">G: {meal.fat}g</span>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
+                ))}
+                <p className="text-center text-[11px] text-[#71717A]">Generando tu plan personalizado con IA…</p>
+              </div>
+            )}
+            {mealPlanError && (
+              <div className="glass-effect rounded-2xl p-5 flex flex-col items-center gap-3">
+                <p className="text-sm text-red-400">{mealPlanError}</p>
+                <button
+                  onClick={fetchMealPlan}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wide border-none cursor-pointer"
+                  style={{ background: 'rgba(255,214,0,0.1)', color: '#FFD600' }}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Reintentar
+                </button>
+              </div>
+            )}
+            {!mealPlanLoading && !mealPlanError && mealPlan && (
+              <>
+                <div className="flex justify-end">
+                  <button
+                    onClick={fetchMealPlan}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold text-[#71717A] hover:text-[#FFD600] transition-colors border-none cursor-pointer"
+                    style={{ background: 'transparent' }}
+                  >
+                    <RefreshCw className="w-3 h-3" /> Regenerar
+                  </button>
+                </div>
+                <div className="flex flex-col gap-3">
+                  {mealPlan.map((meal, i) => (
+                    <motion.div
+                      key={meal.name + i}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.06 }}
+                      className="glass-effect rounded-2xl p-4"
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-[#FFD600] bg-[rgba(255,214,0,0.1)] px-2 py-0.5 rounded-full">{meal.time}</span>
+                            <h4 className="text-sm font-bold text-[#F4F4F5]">{meal.name}</h4>
+                          </div>
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {meal.foods.map(f => (
+                              <span key={f} className="text-[10px] text-[#71717A] bg-[#111113] px-2 py-0.5 rounded-full">{f}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <span className="text-sm font-black text-white flex-shrink-0 ml-2">{meal.kcal} kcal</span>
+                      </div>
+                      <div className="flex gap-3 text-[10px] font-bold mt-2 pt-2 border-t border-white/5">
+                        <span className="text-[#22d3ee]">P: {meal.protein}g</span>
+                        <span className="text-[#f59e0b]">C: {meal.carbs}g</span>
+                        <span className="text-[#f97316]">G: {meal.fat}g</span>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </>
+            )}
+            {!mealPlanLoading && !mealPlanError && !mealPlan && (
+              <div className="glass-effect rounded-2xl p-5 flex flex-col items-center gap-3">
+                <Apple className="w-8 h-8 text-[#FFD600]" />
+                <p className="text-sm text-[#71717A] text-center">Genera tu plan de comidas personalizado con IA.</p>
+                <button
+                  onClick={fetchMealPlan}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wide border-none cursor-pointer"
+                  style={{ background: 'rgba(255,214,0,0.1)', color: '#FFD600' }}
+                >
+                  <Zap className="w-3.5 h-3.5" fill="#FFD600" /> Generar Plan
+                </button>
+              </div>
+            )}
           </motion.div>
         )}
 
