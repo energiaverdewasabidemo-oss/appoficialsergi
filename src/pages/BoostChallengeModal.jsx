@@ -111,6 +111,7 @@ export default function BoostChallengeModal({ userId, existingProfile, onClose, 
   const handleStart = async () => {
     setSaving(true);
     try {
+      const now = new Date().toISOString();
       const { error } = await supabase.from('user_profiles').upsert({
         id: userId,
         goal: form.goal,
@@ -122,11 +123,26 @@ export default function BoostChallengeModal({ userId, existingProfile, onClose, 
         training_days_per_week: form.trainingDays,
         training_experience: form.experience || 'intermediate',
         diet_type: form.diet,
-        boost_challenge_start: new Date().toISOString(),
+        challenge_kind: form.kind,
+        boost_challenge_start: now,
         boost_challenge_active: true,
         onboarding_completed: true,
       });
       if (error) throw error;
+
+      const challengeSlug = form.kind === '21d' ? 'boost-21d' : 'boost-90d';
+      const { data: challenge } = await supabase
+        .from('community_challenges')
+        .select('id')
+        .eq('slug', challengeSlug)
+        .maybeSingle();
+      if (challenge) {
+        await supabase.from('challenge_participants').upsert(
+          { challenge_id: challenge.id, user_id: userId, joined_at: now, current_value: 0 },
+          { onConflict: 'challenge_id,user_id' }
+        );
+      }
+
       onComplete({
         goal: form.goal,
         gender: form.gender,
@@ -137,7 +153,8 @@ export default function BoostChallengeModal({ userId, existingProfile, onClose, 
         training_days_per_week: form.trainingDays,
         training_experience: form.experience || 'intermediate',
         diet_type: form.diet,
-        boost_challenge_start: new Date().toISOString(),
+        challenge_kind: form.kind,
+        boost_challenge_start: now,
         boost_challenge_active: true,
       });
     } catch (e) {

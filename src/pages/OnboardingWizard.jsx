@@ -124,6 +124,7 @@ export default function OnboardingWizard({ userId, userName, onComplete }) {
   const handleFinish = async () => {
     setSaving(true);
     try {
+      const now = new Date().toISOString();
       const { error } = await supabase.from('user_profiles').upsert({
         id: userId,
         full_name: userName || '',
@@ -136,11 +137,25 @@ export default function OnboardingWizard({ userId, userName, onComplete }) {
         training_days_per_week: form.trainingDays,
         training_experience: form.experience,
         diet_type: form.diet,
-        boost_challenge_start: new Date().toISOString(),
+        challenge_kind: '90d',
+        boost_challenge_start: now,
         boost_challenge_active: true,
         onboarding_completed: true,
       });
       if (error) throw error;
+
+      const { data: challenge } = await supabase
+        .from('community_challenges')
+        .select('id')
+        .eq('slug', 'boost-90d')
+        .maybeSingle();
+      if (challenge) {
+        await supabase.from('challenge_participants').upsert(
+          { challenge_id: challenge.id, user_id: userId, joined_at: now, current_value: 0 },
+          { onConflict: 'challenge_id,user_id' }
+        );
+      }
+
       onComplete({
         full_name: userName || '',
         goal: form.goal,
@@ -152,7 +167,8 @@ export default function OnboardingWizard({ userId, userName, onComplete }) {
         training_days_per_week: form.trainingDays,
         training_experience: form.experience,
         diet_type: form.diet,
-        boost_challenge_start: new Date().toISOString(),
+        challenge_kind: '90d',
+        boost_challenge_start: now,
         boost_challenge_active: true,
         onboarding_completed: true,
       });
